@@ -1,6 +1,8 @@
 import "server-only";
-import { lookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { lookup as dnsLookup, type LookupAddress } from "node:dns";
+import { isIP, type LookupFunction } from "node:net";
+import ipaddr from "ipaddr.js";
+import { Agent, fetch } from "undici";
 
 const MAX_BYTES = 5 * 1024 * 1024;
 const TIMEOUT_MS = 10_000;
@@ -12,43 +14,55 @@ export class FetchError extends Error {
   }
 }
 
-/** True for loopback, private, link-local, CGNAT, multicast and other
- * non-public ranges, so a pasted link can't be used to probe the server's
- * own network. */
-function isPrivateAddress(ip: string): boolean {
-  if (isIP(ip) === 4) {
-    const [a, b] = ip.split(".").map(Number);
-    return (
-      a === 0 || a === 10 || a === 127 || a >= 224 ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 198 && (b === 18 || b === 19))
-    );
+/** Only plain public unicast addresses pass. Loopback, private, link-local,
+ * CGNAT, multicast, reserved, and IPv6 forms that tunnel or translate to
+ * IPv4 (NAT64, 6to4, Teredo) are all refused; IPv4-mapped IPv6 is judged by
+ * the IPv4 address inside it. */
+function isPublicAddress(ip: string): boolean {
+  if (!ipaddr.isValid(ip)) return false;
+  let addr = ipaddr.parse(ip);
+  if (addr.kind() === "ipv6" && (addr as ipaddr.IPv6).isIPv4MappedAddress()) {
+    addr = (addr as ipaddr.IPv6).toIPv4Address();
   }
-  const v6 = ip.toLowerCase();
-  if (v6.startsWith("::ffff:")) return isPrivateAddress(v6.slice(7));
-  return (
-    v6 === "::" || v6 === "::1" ||
-    v6.startsWith("fc") || v6.startsWith("fd") ||
-    v6.startsWith("fe8") || v6.startsWith("fe9") || v6.startsWith("fea") || v6.startsWith("feb") ||
-    v6.startsWith("ff")
-  );
+  return addr.range() === "unicast";
 }
 
-async function assertPublic(url: URL) {
+const PRIVATE_ERROR = "That address points at a private network.";
+
+/** DNS lookup used for the actual socket connection. Checking here, at
+ * connect time, closes the DNS-rebinding gap: there is no second lookup
+ * that could answer differently from the one that was checked. */
+const publicOnlyLookup: LookupFunction = (hostname, options, callback) => {
+  dnsLookup(hostname, { ...options, all: true }, (err, addresses: LookupAddress[]) => {
+    if (err) return callback(err, "", 0);
+    const safe = addresses.filter((a) => isPublicAddress(a.address));
+    if (safe.length === 0 || safe.length !== addresses.length) {
+      return callback(Object.assign(new Error(PRIVATE_ERROR), { code: "EPRIVATE" }), "", 0);
+    }
+    if (options.all) return (callback as unknown as (e: null, a: LookupAddress[]) => void)(null, safe);
+    callback(null, safe[0].address, safe[0].family);
+  });
+};
+
+const agent = new Agent({ connect: { lookup: publicOnlyLookup } });
+
+function assertAllowedUrl(url: URL) {
   if (url.protocol !== "http:" && url.protocol !== "https:") {
     throw new FetchError("Only http and https links work.");
   }
   if (url.username || url.password) throw new FetchError("Links with credentials aren't allowed.");
+  // IP literals never go through DNS, so the connect-time lookup can't see
+  // them: check them here instead.
   const host = url.hostname.replace(/^\[|\]$/g, "");
-  const addrs = isIP(host) ? [{ address: host }] : await lookup(host, { all: true }).catch(() => []);
-  if (addrs.length === 0) throw new FetchError("Couldn't find that site.");
-  if (addrs.some((a) => isPrivateAddress(a.address))) {
-    throw new FetchError("That address points at a private network.");
-  }
+  if (isIP(host) && !isPublicAddress(host)) throw new FetchError(PRIVATE_ERROR);
 }
+
+const isPrivateRefusal = (e: unknown): boolean => {
+  for (let cur = e; cur instanceof Error; cur = (cur as Error & { cause?: unknown }).cause) {
+    if ((cur as Error & { code?: string }).code === "EPRIVATE") return true;
+  }
+  return false;
+};
 
 /** Fetches a public web page as text, re-checking every redirect hop, with a
  * timeout and a size cap. */
@@ -61,15 +75,17 @@ export async function safeFetchText(input: string): Promise<{ url: string; body:
   }
 
   for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
-    await assertPublic(url);
+    assertAllowedUrl(url);
     const res = await fetch(url, {
       redirect: "manual",
+      dispatcher: agent,
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
         "user-agent": "Mozilla/5.0 (compatible; SpeedReader/1.0)",
         accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
       },
     }).catch((e: unknown) => {
+      if (isPrivateRefusal(e)) throw new FetchError(PRIVATE_ERROR);
       throw new FetchError(
         e instanceof Error && e.name === "TimeoutError" ? "That site took too long to answer." : "Couldn't reach that site.",
         502
