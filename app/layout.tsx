@@ -7,6 +7,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  // Draw under the notch / home bar; the CSS pads with safe-area insets.
+  viewportFit: "cover",
   themeColor: "#111111",
 };
 

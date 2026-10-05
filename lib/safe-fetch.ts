@@ -65,9 +65,14 @@ const isPrivateRefusal = (e: unknown): boolean => {
   return false;
 };
 
+const WEB_PAGE = /text\/html|application\/xhtml|text\/plain/;
+
 /** Fetches a public web page as text, re-checking every redirect hop, with a
- * timeout and a size cap. */
-export async function safeFetchText(input: string): Promise<{ url: string; body: string; contentType: string }> {
+ * timeout and a size cap. `accept` limits which content types are allowed. */
+export async function safeFetchText(
+  input: string,
+  accept: RegExp = WEB_PAGE
+): Promise<{ url: string; body: string; contentType: string }> {
   let url: URL;
   try {
     url = new URL(input.trim());
@@ -83,7 +88,7 @@ export async function safeFetchText(input: string): Promise<{ url: string; body:
       signal: AbortSignal.timeout(TIMEOUT_MS),
       headers: {
         "user-agent": "Mozilla/5.0 (compatible; SpeedReader/1.0)",
-        accept: "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.5",
+        accept: "text/html,application/xhtml+xml,application/atom+xml,text/plain;q=0.9,*/*;q=0.5",
       },
     }).catch((e: unknown) => {
       if (isPrivateRefusal(e)) throw new FetchError(PRIVATE_ERROR);
@@ -102,7 +107,7 @@ export async function safeFetchText(input: string): Promise<{ url: string; body:
     if (!res.ok) throw new FetchError(`That site answered with an error (${res.status}).`, 502);
 
     const contentType = res.headers.get("content-type") ?? "";
-    if (!/text\/html|application\/xhtml|text\/plain/.test(contentType)) {
+    if (!accept.test(contentType)) {
       throw new FetchError("That link isn't a web page. For PDFs and EPUBs, download the file and open it instead.");
     }
 

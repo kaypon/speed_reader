@@ -5,6 +5,8 @@ import { formatDuration } from "@/lib/rsvp";
 import { countWords, deleteDoc, listDocs, renameDoc, type DocMeta } from "@/lib/library";
 import { importFile } from "@/lib/import-file";
 import { cleanGutenberg } from "@/lib/gutenberg";
+import { BookSearch } from "./BookSearch";
+import type { BookResult } from "@/app/api/books/route";
 
 type Tab = "library" | "add";
 
@@ -41,7 +43,8 @@ export function LibraryPanel({ open, currentId, wpm, onOpenDoc, onAdd, onDeleted
     const dlg = ref.current;
     if (!dlg) return;
     if (open && !dlg.open) {
-      refresh().then((list) => setTab(list.length ? "library" : "add"));
+      refresh();
+      setTab("library");
       setError(null);
       dlg.showModal();
     } else if (!open && dlg.open) {
@@ -123,6 +126,29 @@ export function LibraryPanel({ open, currentId, wpm, onOpenDoc, onAdd, onDeleted
     }
   };
 
+  // Find-a-book: pull the whole book through the Gutenberg import, save, read.
+  const pickBook = async (book: BookResult) => {
+    const res = await fetch("/api/extract", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: `https://www.gutenberg.org/ebooks/${book.id}` }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      throw new Error(
+        res.status === 502 && /error \(404\)/.test(data.error ?? "")
+          ? "That one has no text edition (it may be an audiobook). Try another."
+          : data.error ?? "Couldn't load that book."
+      );
+    }
+    try {
+      await onAdd(data.title || book.title, data.text, data.url);
+    } catch {
+      throw new Error("Couldn't save that book. Your browser storage may be full.");
+    }
+    onClose();
+  };
+
   const words = countWords(text);
 
   return (
@@ -160,8 +186,10 @@ export function LibraryPanel({ open, currentId, wpm, onOpenDoc, onAdd, onDeleted
       </header>
 
       {tab === "library" ? (
+        <div className="library-tab">
+        <BookSearch onPick={pickBook} />
         <div className="library">
-          {docs.length === 0 && <p className="library__empty">Nothing saved yet. Add something to read.</p>}
+          {docs.length === 0 && <p className="library__empty">Nothing saved yet. Find a book above, or add your own text.</p>}
           {docs.map((doc) => {
             const pct = doc.wordCount ? Math.min(100, Math.round(((doc.pos + 1) / doc.wordCount) * 100)) : 0;
             const left = ((doc.wordCount - doc.pos) / wpm) * 60000;
@@ -180,6 +208,7 @@ export function LibraryPanel({ open, currentId, wpm, onOpenDoc, onAdd, onDeleted
               </div>
             );
           })}
+        </div>
         </div>
       ) : (
         <div className="add">

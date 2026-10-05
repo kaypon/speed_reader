@@ -159,6 +159,63 @@ export function Reader() {
     setWordIndex(0);
   }, [pause]);
 
+  // ---------- phone niceties ----------
+  // iPhone Safari has no Fullscreen API: hide the button there.
+  const [canFullscreen] = useState(() => typeof document !== "undefined" && document.fullscreenEnabled);
+
+  // Keep the screen on while words are flashing.
+  useEffect(() => {
+    if (!playing || !("wakeLock" in navigator)) return;
+    let lock: WakeLockSentinel | null = null;
+    let cancelled = false;
+    const acquire = () =>
+      navigator.wakeLock
+        .request("screen")
+        .then((l) => {
+          if (cancelled) l.release();
+          else lock = l;
+        })
+        .catch(() => {});
+    acquire();
+    // The lock drops when the tab is hidden; take it again on return.
+    const onVisible = () => document.visibilityState === "visible" && acquire();
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVisible);
+      lock?.release().catch(() => {});
+    };
+  }, [playing]);
+
+  // Tap the stage to play/pause; swipe sideways to step through words.
+  const touchStart = useRef<{ x: number; y: number } | null>(null);
+  const swiped = useRef(false);
+  const onTouchStart = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    touchStart.current = { x: t.clientX, y: t.clientY };
+    swiped.current = false;
+  };
+  const onTouchEnd = (e: React.TouchEvent) => {
+    const start = touchStart.current;
+    touchStart.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) > 40 && Math.abs(dx) > Math.abs(dy) * 1.5) {
+      swiped.current = true; // swallow the click that follows
+      const n = Math.max(1, Math.round(Math.abs(dx) / 60));
+      step(dx < 0 ? n : -n);
+    }
+  };
+  const onStageClick = () => {
+    if (swiped.current) {
+      swiped.current = false;
+      return;
+    }
+    toggle();
+  };
+
   const fullscreen = () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen?.();
@@ -268,13 +325,15 @@ export function Reader() {
           <button className="text-btn" onClick={() => setSettingsOpen((o) => !o)} aria-expanded={settingsOpen}>
             Settings
           </button>
-          <button className="icon-btn icon-btn--flat" onClick={fullscreen} aria-label="Fullscreen">
-            <FullscreenIcon />
-          </button>
+          {canFullscreen && (
+            <button className="icon-btn icon-btn--flat" onClick={fullscreen} aria-label="Fullscreen">
+              <FullscreenIcon />
+            </button>
+          )}
         </div>
       </div>
 
-      <div className="stage" onClick={toggle}>
+      <div className="stage" onClick={onStageClick} onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}>
         {countdown > 0 ? (
           <div className="word word--count" key={countdown}>
             <span />
