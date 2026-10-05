@@ -4,7 +4,8 @@ import { isIP, type LookupFunction } from "node:net";
 import ipaddr from "ipaddr.js";
 import { Agent, fetch } from "undici";
 
-const MAX_BYTES = 5 * 1024 * 1024;
+// Room for the longest books: the King James Bible is ~4.5 MB of plain text.
+const MAX_BYTES = 12 * 1024 * 1024;
 const TIMEOUT_MS = 10_000;
 const MAX_REDIRECTS = 5;
 

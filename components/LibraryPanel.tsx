@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { formatDuration } from "@/lib/rsvp";
 import { countWords, deleteDoc, listDocs, renameDoc, type DocMeta } from "@/lib/library";
 import { importFile } from "@/lib/import-file";
+import { cleanGutenberg } from "@/lib/gutenberg";
 
 type Tab = "library" | "add";
 
@@ -96,7 +97,8 @@ export function LibraryPanel({ open, currentId, wpm, onOpenDoc, onAdd, onDeleted
   const save = async () => {
     setBusy("Saving…");
     try {
-      await onAdd(title, text, source);
+      const book = cleanGutenberg(text);
+      await onAdd(title || book.title || "", book.text, source);
       resetForm();
       onClose();
     } catch {

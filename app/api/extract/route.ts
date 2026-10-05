@@ -1,6 +1,7 @@
 import { Readability } from "@mozilla/readability";
 import { parseHTML } from "linkedom";
 import { FetchError, safeFetchText } from "@/lib/safe-fetch";
+import { cleanGutenberg, gutenbergId, gutenbergTextUrl, isGutenbergText } from "@/lib/gutenberg";
 
 /** Turns block-level HTML into plain text with blank lines between
  * paragraphs, so the reader can pause on paragraph breaks. */
@@ -31,9 +32,16 @@ export async function POST(request: Request) {
   }
 
   try {
-    const page = await safeFetchText(link);
+    // Gutenberg: whatever book link was pasted, read the plain-text edition.
+    const bookId = gutenbergId(link);
+    const page = await safeFetchText(bookId ? gutenbergTextUrl(bookId) : link);
 
     if (page.contentType.includes("text/plain")) {
+      if (isGutenbergText(page.body)) {
+        const book = cleanGutenberg(page.body);
+        const fallback = bookId ? `Gutenberg #${bookId}` : new URL(page.url).pathname.split("/").pop() || page.url;
+        return Response.json({ title: book.title ?? fallback, text: book.text, url: link.trim() });
+      }
       return Response.json({ title: new URL(page.url).pathname.split("/").pop() || page.url, text: page.body, url: page.url });
     }
 

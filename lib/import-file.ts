@@ -1,3 +1,5 @@
+import { cleanGutenberg } from "./gutenberg";
+
 /** Turns a dropped or opened file into { title, text }. Runs in the browser:
  * PDFs through pdf.js, EPUBs by unzipping and walking the spine. */
 
@@ -9,7 +11,9 @@ export async function importFile(file: File): Promise<Imported> {
   const name = file.name.toLowerCase();
   if (name.endsWith(".pdf") || file.type === "application/pdf") return importPdf(file);
   if (name.endsWith(".epub") || file.type === "application/epub+zip") return importEpub(file);
-  return { title: stripExt(file.name), text: await file.text() };
+  const raw = await file.text();
+  const book = cleanGutenberg(raw);
+  return { title: book.title ?? stripExt(file.name), text: book.text };
 }
 
 // ---------- PDF ----------
