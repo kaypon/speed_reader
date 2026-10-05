@@ -10,6 +10,8 @@ const eslintConfig = defineConfig([
     // Default ignores of eslint-config-next:
     ".next/**",
     "out/**",
+    // Copied from pdfjs-dist by postinstall.
+    "public/pdf.worker.min.mjs",
     "build/**",
     "next-env.d.ts",
   ]),
